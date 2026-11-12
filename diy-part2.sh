@@ -116,33 +116,74 @@ fi
 
 
 # ============================================================
-# Qualcomm MSM8916 WCN3620 Bluetooth support
+# 关掉 ruby 的 YJIT —— 它会把 rust host 工具链拽进构建
 # ============================================================
-
-KERNEL_CONFIG="target/linux/generic/config-6.12"
-
-if [ ! -f "$KERNEL_CONFIG" ]; then
-    echo "ERROR: Kernel config not found: $KERNEL_CONFIG"
-    find target/linux -name 'config-6.12' -print
-    exit 1
+# 依赖链：luci-app-openclash -> +ruby -> aarch64 上 RUBY_ENABLE_YJIT 默认 y
+#         -> lang/ruby 的 PKG_BUILD_DEPENDS 里有 RUBY_ENABLE_YJIT:rust/host
+# 而 immortalwrt/packages(openwrt-25.12) 的 rust 1.96.0 打包脚本写死
+#   --set=llvm.download-ci-llvm=true
+# 会去 Rust CI 下预编译 LLVM，1.96.0 的 CI 产物已过期 -> 404
+#   ERROR: failed to download llvm from ci
+#   ERROR: package/feeds/packages/rust [host] failed to build.
+# YJIT 只是 Ruby 的 JIT 加速，openclash 的 ruby 脚本用不到；关掉还省 30~60 分钟。
+if [ -f .config ]; then
+	YJIT_OFF=0
+	if grep -q '^CONFIG_RUBY_ENABLE_YJIT=' .config; then
+		sed -i 's/^CONFIG_RUBY_ENABLE_YJIT=.*/# CONFIG_RUBY_ENABLE_YJIT is not set/' .config
+		YJIT_OFF=1
+	elif ! grep -q '^# CONFIG_RUBY_ENABLE_YJIT is not set$' .config; then
+		# 基线 config 里没有这个符号：显式写一条 n，defconfig 时不会被默认值 y 覆盖
+		echo '# CONFIG_RUBY_ENABLE_YJIT is not set' >> .config
+		YJIT_OFF=1
+	fi
+	echo "ruby YJIT: 已关闭（本次不再需要 rust host 工具链），$YJIT_OFF"
+	grep -n 'RUBY_ENABLE_YJIT' .config || true
+else
+	echo "::warning::没有 .config，跳过 YJIT 处理"
 fi
 
-enable_kernel_option() {
-    local option="$1"
-    local value="$2"
 
-    sed -i "/^# ${option} is not set$/d" "$KERNEL_CONFIG"
-    sed -i "/^${option}=/d" "$KERNEL_CONFIG"
-    echo "${option}=${value}" >> "$KERNEL_CONFIG"
+# ============================================================
+# Qualcomm MSM8916 WCN3620 Bluetooth support
+# ============================================================
+# 注意：必须改 target 自己的 config，不能改 target/linux/generic/config-6.12。
+# OpenWrt 合并顺序是 generic -> target（后者覆盖前者），而 msm89xx 的
+# config-6.12 里本来就有 BT=y / BT_QCA=y / "# CONFIG_BT_QCOMSMD is not set"，
+# 写进 generic 会被 target 里那行 not set 直接顶掉，等于没改。
+KP="${KERNEL_PATCHVER:-6.12}"
+KERNEL_CONFIG="target/linux/msm89xx/config-$KP"
+
+if [ ! -f "$KERNEL_CONFIG" ]; then
+	echo "::error::Target kernel config not found: $KERNEL_CONFIG"
+	ls target/linux/msm89xx/config-* 2>/dev/null || true
+	exit 1
+fi
+
+set_kernel_option() {
+	local option="$1"
+	local value="$2"
+
+	if grep -q "^# ${option} is not set$" "$KERNEL_CONFIG"; then
+		sed -i "s|^# ${option} is not set$|${option}=${value}|" "$KERNEL_CONFIG"
+	elif grep -q "^${option}=" "$KERNEL_CONFIG"; then
+		sed -i "s|^${option}=.*|${option}=${value}|" "$KERNEL_CONFIG"
+	else
+		echo "${option}=${value}" >> "$KERNEL_CONFIG"
+	fi
 }
 
-enable_kernel_option CONFIG_BT y
-enable_kernel_option CONFIG_RPMSG y
-enable_kernel_option CONFIG_QCOM_WCNSS_CTRL y
-enable_kernel_option CONFIG_BT_QCOMSMD m
+# btqcomsmd 的 Kconfig 依赖 RPMSG 和 QCOM_WCNSS_CTRL，两个在 target 里本来就是 y，
+# 这里再兜一次底；关键是把 BT_QCOMSMD 从 not set 打开。
+set_kernel_option CONFIG_BT y
+set_kernel_option CONFIG_RPMSG y
+set_kernel_option CONFIG_QCOM_WCNSS_CTRL y
+set_kernel_option CONFIG_BT_QCOMSMD m
 
-echo "Qualcomm Bluetooth kernel options added:"
-grep -E 'CONFIG_(BT|RPMSG|QCOM_WCNSS_CTRL|BT_QCOMSMD)=' "$KERNEL_CONFIG"
+echo "Qualcomm Bluetooth kernel options in $KERNEL_CONFIG:"
+grep -E '^CONFIG_(BT|BT_QCA|RPMSG|QCOM_WCNSS_CTRL|QCOM_SMD_RPM|BT_QCOMSMD)=' "$KERNEL_CONFIG" || true
+grep -q '^CONFIG_BT_QCOMSMD=m$' "$KERNEL_CONFIG" \
+	&& echo "OK: CONFIG_BT_QCOMSMD=m 已写入 target config" \
+	|| echo "::error::CONFIG_BT_QCOMSMD 没写进去"
 
 
 
