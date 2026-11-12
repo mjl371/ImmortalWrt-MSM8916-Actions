@@ -146,10 +146,16 @@ fi
 # ============================================================
 # Qualcomm MSM8916 WCN3620 Bluetooth support
 # ============================================================
-# 注意：必须改 target 自己的 config，不能改 target/linux/generic/config-6.12。
-# OpenWrt 合并顺序是 generic -> target（后者覆盖前者），而 msm89xx 的
-# config-6.12 里本来就有 BT=y / BT_QCA=y / "# CONFIG_BT_QCOMSMD is not set"，
-# 写进 generic 会被 target 里那行 not set 直接顶掉，等于没改。
+# 正式的定义已经写进仓库里的 target 文件，这里只做兜底和自检：
+#   - scripts/msm89xx/target/linux/msm89xx/modules.mk  : kmod-btqca / kmod-btqcomsmd
+#   - scripts/msm89xx/target/linux/msm89xx/Makefile    : DEFAULT_PACKAGES
+#   - scripts/msm89xx/target/linux/msm89xx/config-6.12 : BT_QCOMSMD=m / BT_QCA=m
+#   - scripts/msm89xx/target/linux/msm89xx/config-7.3  : 同上（config-6.12 缺
+#     CONFIG_SQUASHFS，diy-part1 会用 config-7.3 当基底补全，后者的值说了算）
+#
+# 为什么必须是 =m 而不是 =y：目标里自己定义了 KernelPackage/btqcomsmd，
+# 它的 FILES 指向 btqcomsmd.ko。如果 BT_QCOMSMD=y 编进内核就不会产生 .ko，
+# 该 kmod 包会因缺文件构建失败。同理 btqca 必须是 =m。
 KP="${KERNEL_PATCHVER:-6.12}"
 KERNEL_CONFIG="target/linux/msm89xx/config-$KP"
 
@@ -159,6 +165,8 @@ if [ ! -f "$KERNEL_CONFIG" ]; then
 	exit 1
 fi
 
+# 只修正 BT_QCOMSMD / BT_QCA 的值，不再新增无关的 y。
+# 补全逻辑（diy-part1 里 config-7.3 覆盖）可能把它改回 not set，这里兜底。
 set_kernel_option() {
 	local option="$1"
 	local value="$2"
@@ -172,24 +180,27 @@ set_kernel_option() {
 	fi
 }
 
-# btqcomsmd 的 Kconfig 依赖 RPMSG 和 QCOM_WCNSS_CTRL，两个在 target 里本来就是 y，
-# 这里再兜一次底；关键是把 BT_QCOMSMD 打开。
-# 必须是 =y 不是 =m：OpenWrt 上游没有 btqcomsmd 的 kmod 打包
-# （package/kernel/linux/modules/bluetooth.mk 里只有 bluetooth/hci-uart/btusb/btbcm/btmtk…），
-# =m 编出来的 btqcomsmd.ko 没有任何包 FILES 引用它，不会进固件。
+# btqcomsmd 的 Kconfig 依赖 RPMSG 和 QCOM_WCNSS_CTRL，两者在 target 里本来就是 y
 set_kernel_option CONFIG_BT y
 set_kernel_option CONFIG_RPMSG y
 set_kernel_option CONFIG_QCOM_WCNSS_CTRL y
-set_kernel_option CONFIG_BT_QCOMSMD y
+set_kernel_option CONFIG_BT_QCA m
+set_kernel_option CONFIG_BT_QCOMSMD m
 # DTS 侧不用改：msm8916.dtsi 里 wcnss_ctrl 下的
 #   wcnss_bt: bluetooth { compatible = "qcom,wcnss-bt"; };
 # 没有 status 属性，默认就是 enabled。
 
 echo "Qualcomm Bluetooth kernel options in $KERNEL_CONFIG:"
 grep -E '^CONFIG_(BT|BT_QCA|RPMSG|QCOM_WCNSS_CTRL|QCOM_SMD_RPM|BT_QCOMSMD)=' "$KERNEL_CONFIG" || true
-grep -q '^CONFIG_BT_QCOMSMD=y$' "$KERNEL_CONFIG" \
-	&& echo "OK: CONFIG_BT_QCOMSMD=y 已写入 target config" \
-	|| echo "::error::CONFIG_BT_QCOMSMD 没写进去"
+
+BT_OK=1
+grep -q '^CONFIG_BT_QCOMSMD=m$' "$KERNEL_CONFIG" || { echo "::error::CONFIG_BT_QCOMSMD 不是 m"; BT_OK=0; }
+grep -q '^CONFIG_BT_QCA=m$' "$KERNEL_CONFIG" || { echo "::error::CONFIG_BT_QCA 不是 m"; BT_OK=0; }
+grep -q 'KernelPackage/btqcomsmd' target/linux/msm89xx/modules.mk \
+	|| { echo "::error::modules.mk 里没有 KernelPackage/btqcomsmd"; BT_OK=0; }
+grep -q 'KernelPackage/btqca' target/linux/msm89xx/modules.mk \
+	|| { echo "::error::modules.mk 里没有 KernelPackage/btqca"; BT_OK=0; }
+[ "$BT_OK" = "1" ] && echo "OK: 蓝牙 kmod 包与内核配置就位（btqca/btqcomsmd = m）"
 
 
 
