@@ -115,3 +115,34 @@ else
 fi
 
 
+# ============================================================
+# Qualcomm MSM8916 WCN3620 Bluetooth support
+# ============================================================
+
+KERNEL_CONFIG="target/linux/generic/config-6.12"
+
+if [ ! -f "$KERNEL_CONFIG" ]; then
+    echo "ERROR: Kernel config not found: $KERNEL_CONFIG"
+    find target/linux -name 'config-6.12' -print
+    exit 1
+fi
+
+enable_kernel_option() {
+    local option="$1"
+    local value="$2"
+
+    sed -i "/^# ${option} is not set$/d" "$KERNEL_CONFIG"
+    sed -i "/^${option}=/d" "$KERNEL_CONFIG"
+    echo "${option}=${value}" >> "$KERNEL_CONFIG"
+}
+
+enable_kernel_option CONFIG_BT y
+enable_kernel_option CONFIG_RPMSG y
+enable_kernel_option CONFIG_QCOM_WCNSS_CTRL y
+enable_kernel_option CONFIG_BT_QCOMSMD m
+
+echo "Qualcomm Bluetooth kernel options added:"
+grep -E 'CONFIG_(BT|RPMSG|QCOM_WCNSS_CTRL|BT_QCOMSMD)=' "$KERNEL_CONFIG"
+
+
+
