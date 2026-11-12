@@ -203,4 +203,31 @@ grep -q 'KernelPackage/btqca' target/linux/msm89xx/modules.mk \
 [ "$BT_OK" = "1" ] && echo "OK: 蓝牙 kmod 包与内核配置就位（btqca/btqcomsmd = m）"
 
 
+# ============================================================
+# BlueZ 用户态：内核侧有了还得能驱动
+# ============================================================
+# target Makefile 的 DEFAULT_PACKAGES 已经把 bluez-daemon/bluez-utils/bluez-tools
+# 列进去了，但 config/*.config 这些基线配置里显式写着
+#   "# CONFIG_PACKAGE_bluez-xxx is not set"
+# 显式 n 的优先级高于 DEFAULT_PACKAGES，defconfig 会原样保留，结果固件里只有
+# kmod 没有 userspace（hci0 起得来，但没有 bluetoothctl 可用）。这里强制打开，
+# 依赖（bluez-libs / bluez-utils-extra / glib2 / dbus / libreadline…）由
+# make defconfig 按 DEPENDS 自动补齐。
+if [ -f .config ]; then
+	for pkg in bluez-daemon bluez-utils bluez-tools; do
+		if grep -q "^# CONFIG_PACKAGE_${pkg} is not set$" .config; then
+			sed -i "s|^# CONFIG_PACKAGE_${pkg} is not set$|CONFIG_PACKAGE_${pkg}=y|" .config
+			echo "bluez: ${pkg} -> y"
+		elif ! grep -q "^CONFIG_PACKAGE_${pkg}=" .config; then
+			echo "CONFIG_PACKAGE_${pkg}=y" >> .config
+			echo "bluez: ${pkg} -> y (追加)"
+		fi
+	done
+	echo "bluez 相关配置："
+	grep -E "^(# )?CONFIG_PACKAGE_bluez" .config | head -8 || true
+else
+	echo "::warning::没有 .config，跳过 bluez 处理"
+fi
+
+
 
