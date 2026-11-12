@@ -173,16 +173,22 @@ set_kernel_option() {
 }
 
 # btqcomsmd 的 Kconfig 依赖 RPMSG 和 QCOM_WCNSS_CTRL，两个在 target 里本来就是 y，
-# 这里再兜一次底；关键是把 BT_QCOMSMD 从 not set 打开。
+# 这里再兜一次底；关键是把 BT_QCOMSMD 打开。
+# 必须是 =y 不是 =m：OpenWrt 上游没有 btqcomsmd 的 kmod 打包
+# （package/kernel/linux/modules/bluetooth.mk 里只有 bluetooth/hci-uart/btusb/btbcm/btmtk…），
+# =m 编出来的 btqcomsmd.ko 没有任何包 FILES 引用它，不会进固件。
 set_kernel_option CONFIG_BT y
 set_kernel_option CONFIG_RPMSG y
 set_kernel_option CONFIG_QCOM_WCNSS_CTRL y
-set_kernel_option CONFIG_BT_QCOMSMD m
+set_kernel_option CONFIG_BT_QCOMSMD y
+# DTS 侧不用改：msm8916.dtsi 里 wcnss_ctrl 下的
+#   wcnss_bt: bluetooth { compatible = "qcom,wcnss-bt"; };
+# 没有 status 属性，默认就是 enabled。
 
 echo "Qualcomm Bluetooth kernel options in $KERNEL_CONFIG:"
 grep -E '^CONFIG_(BT|BT_QCA|RPMSG|QCOM_WCNSS_CTRL|QCOM_SMD_RPM|BT_QCOMSMD)=' "$KERNEL_CONFIG" || true
-grep -q '^CONFIG_BT_QCOMSMD=m$' "$KERNEL_CONFIG" \
-	&& echo "OK: CONFIG_BT_QCOMSMD=m 已写入 target config" \
+grep -q '^CONFIG_BT_QCOMSMD=y$' "$KERNEL_CONFIG" \
+	&& echo "OK: CONFIG_BT_QCOMSMD=y 已写入 target config" \
 	|| echo "::error::CONFIG_BT_QCOMSMD 没写进去"
 
 
